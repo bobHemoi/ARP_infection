@@ -51,6 +51,9 @@ int sendArpPacket(pcap_t* handle, std::string aprHdr,Mac ethSmac, Mac ethDmac,
 }
 
 int main(int argc, char* argv[]) {
+	Mac myMac = my_mac_addr();
+	Ip	myIp  = my_ip_addr();
+	
 	if (argc != 4) {
 		usage();
 		return -1;
@@ -73,8 +76,7 @@ int main(int argc, char* argv[]) {
 	// 자신의 Mac 주소 값을 알아냄
 	Mac broadCastMac = Mac("ff:ff:ff:ff:ff:ff");
 	Mac zeroMac = Mac("00:00:00:00:00:00");
-	Mac myMac = my_mac_addr();
-	Ip	myIp  = my_ip_addr();
+
 	Mac senderMac;
 
 	// Sender(Victim)의 Mac 주소를 알아옴
@@ -115,7 +117,7 @@ int main(int argc, char* argv[]) {
 
 	}
 	// handle, Mac ethSmac, Mac ethDmac, Mac arpSmac, Ip arpSip, Mac arpTmac, Ip arpTip
-	int res = sendArpPacket(handle, "Reply", myMac, senderMac, myMac, targetIp, senderMac, senderIp);
+	res = sendArpPacket(handle, "Reply", myMac, senderMac, myMac, targetIp, senderMac, senderIp);
 	if (res != 0) {
 		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
 	}
