@@ -5,6 +5,12 @@
 // #include "ip.h"
 #include "myAddr.h"
 #include <string>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <unistd.h>
+
 
 #pragma pack(push, 1)
 struct EthArpPacket {
@@ -37,7 +43,7 @@ int sendArpPacket(pcap_t* handle, std::string aprHdr,Mac ethSmac, Mac ethDmac,
 	packet.arp_.pro_ = htons(EthHdr::Ip4);
 	packet.arp_.hln_ = Mac::SIZE;
 	packet.arp_.pln_ = Ip::SIZE;
-	packet.arp_.op_ = htons(ArpHdr::Request);
+
 	packet.arp_.smac_ = Mac(arpSmac);
 	packet.arp_.sip_ = htonl(arpSip);
 	packet.arp_.tmac_ = Mac(arpTmac);
@@ -50,9 +56,47 @@ int sendArpPacket(pcap_t* handle, std::string aprHdr,Mac ethSmac, Mac ethDmac,
 	return res;
 }
 
+void my_mac_addr(char* dev, char* myMac){
+    struct ifreq ifr;
+	char MAC_str[18];
+
+	#define HWADDR_len 6
+    int s,i;
+
+    s = socket(AF_INET, SOCK_DGRAM, 0);
+    strcpy(ifr.ifr_name, dev);
+    ioctl(s, SIOCGIFHWADDR, &ifr);
+    for (i=0; i<HWADDR_len; i++)
+        sprintf(&MAC_str[i*3],"%02X:",((unsigned char*)ifr.ifr_hwaddr.sa_data)[i]);
+    MAC_str[17]='\0';
+    printf("myOwn MAC Address is %s\n", MAC_str);
+    
+	close(s);
+	strcpy(myMac, MAC_str);
+	return;
+}
+
+void my_ip_addr(char* dev, char* myIp){
+    struct ifreq ifr;
+    char ipstr[40];
+    int s;
+ 
+    s = socket(AF_INET, SOCK_DGRAM, 0);
+    strncpy(ifr.ifr_name, dev, IFNAMSIZ);
+ 
+    if (ioctl(s, SIOCGIFADDR, &ifr) < 0) {
+        printf("Error");
+    } else {
+        inet_ntop(AF_INET, ifr.ifr_addr.sa_data+2,
+                ipstr,sizeof(struct sockaddr));
+        printf("myOwn IP  Address is %s\n\n", ipstr);
+		strcpy(myIp, ipstr);
+    }
+	close(s);
+    return;
+}
+
 int main(int argc, char* argv[]) {
-	Mac myMac = my_mac_addr();
-	Ip	myIp  = my_ip_addr();
 	
 	if (argc != 4) {
 		usage();
@@ -60,6 +104,15 @@ int main(int argc, char* argv[]) {
 	}
 
 	char* dev = argv[1];
+
+	char* myMacStr = (char*)malloc(sizeof(char)*18);
+	char* myIpStr  = (char*)malloc(sizeof(char)*16);
+	my_mac_addr(dev, myMacStr);
+	my_ip_addr(dev, myIpStr);
+
+	Mac myMac = {myMacStr};
+	Ip  myIp  = {myIpStr};
+
 	char errbuf[PCAP_ERRBUF_SIZE];
 	pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
 	if (handle == nullptr) {
@@ -90,6 +143,7 @@ int main(int argc, char* argv[]) {
 	// ARP reply 수신
 	// 패킷을 받고
 	while (true) {
+		sleep(0);
 		struct pcap_pkthdr* header;
 		const u_char*		packet;
 		const EthHdr*		ethernet;
@@ -112,7 +166,7 @@ int main(int argc, char* argv[]) {
 			continue;
 		}
 
-		senderMac = arp->smac_;
+		Mac senderMac = arp->smac_;
 		break;
 
 	}
