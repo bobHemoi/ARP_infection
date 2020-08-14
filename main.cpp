@@ -9,6 +9,7 @@
 #include <net/if.h>
 #include <unistd.h>
 #include <map>
+#include "iphdr.h"
 
 using namespace std;
 
@@ -96,6 +97,13 @@ char* my_ip_addr(char* dev){
     }
 	close(s);
     return ipstr;
+}
+
+Ip checkMac(map<Ip, Ip> ASFMAP,	map<Ip, Mac> IP2MAC, Mac chkMac) {
+		for(auto it = ASFMAP.begin(); it!=ASFMAP.end(); it++){
+			if (IP2MAC[it->second] == chkMac) { return it->first; }
+		}
+		return 0;
 }
 
 int main(int argc, char* argv[]) {
@@ -246,13 +254,15 @@ int main(int argc, char* argv[]) {
 		};
 
 		// 다른 패킷도 relay 해주어야 함
-		if (ethernet->type() == EthHdr::Ip4){
-
-
+		Ip originalIp = checkMac(ASFMAP, IP2MAC, ethernet->smac());
+		if (originalIp){
+ 			Mac originalMac = ethernet->smac();
+			ethernet->dmac() = IP2MAC[originalIp];
+			ethernet->smac() = myMac;
 		}
-
 	}
 
+	
 	// 마지막 recover 잊지 말기
 
 	printf("finish");
