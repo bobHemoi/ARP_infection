@@ -268,7 +268,7 @@ int main(int argc, char* argv[]) {
  			Mac originalMac = ethernet->smac();
 			ethernet->dmac_ = IP2MAC[originalIp];
 			ethernet->smac_ = myMac;
-			memcpy((u_char*)packet, (u_char*)ethernet, sizeof(*ethernet));
+			memcpy((u_char*)packet, (u_char*)ethernet, sizeof(*packet));
 
 			res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&packet), sizeof(EthArpPacket));
 		
